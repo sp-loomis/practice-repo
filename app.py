@@ -1,5 +1,8 @@
 import streamlit as st
 
+def increment_counter():
+    st.session_state.count += 1
+    
 def main():
     st.title("Welcome to My EC2 Practice App!")
     
@@ -15,9 +18,7 @@ def main():
     st.write("## Interactive Counter")
     st.write(f"Current count: {st.session_state.count}")
     
-    if st.button("Increment"):
-        st.session_state.count += 1
-        st.rerun()
+    st.button("Increment", on_click=increment_counter)
 
 if __name__ == "__main__":
     main()
