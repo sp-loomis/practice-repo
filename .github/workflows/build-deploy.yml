@@ -73,22 +73,32 @@ jobs:
 
       - name: Update Launch Template
         run: |
-          # Get current launch template
+          # Try to get current launch template, but don't fail if it doesn't exist
           TEMPLATE_ID=$(aws ec2 describe-launch-templates \
             --launch-template-names ${{ env.APP_NAME }}-template \
             --query 'LaunchTemplates[0].LaunchTemplateId' \
-            --output text)
+            --output text 2>/dev/null || echo "")
 
-          if [ "$TEMPLATE_ID" = "None" ]; then
+          # Check if template exists (TEMPLATE_ID will be empty or "None" if not found)
+          if [ -z "$TEMPLATE_ID" ] || [ "$TEMPLATE_ID" = "None" ]; then
             echo "Creating new launch template"
             aws ec2 create-launch-template \
               --launch-template-name ${{ env.APP_NAME }}-template \
               --launch-template-data '{
                 "ImageId": "${{ needs.build-ami.outputs.ami-id }}",
-                "InstanceType": "t3.micro",
+                "InstanceType": "t2.micro",
                 "SecurityGroupIds": ["${{ secrets.SECURITY_GROUP_ID }}"],
                 "IamInstanceProfile": {"Name": "${{ secrets.IAM_INSTANCE_PROFILE }}"},
-                "UserData": "'$(echo 'IyEvYmluL2Jhc2gKc3VkbyBzeXN0ZW1jdGwgc3RhcnQgc3RyZWFtbGl0LWFwcA==' | base64 -d | base64 -w 0)'"
+                "UserData": "'$(echo 'IyEvYmluL2Jhc2gKc3VkbyBzeXN0ZW1jdGwgc3RhcnQgc3RyZWFtbGl0LWFwcA==' | base64 -d | base64 -w 0)'",
+                "TagSpecifications": [
+                  {
+                    "ResourceType": "instance",
+                    "Tags": [
+                      {"Key": "Name", "Value": "${{ env.APP_NAME }}"},
+                      {"Key": "Environment", "Value": "production"}
+                    ]
+                  }
+                ]
               }'
           else
             echo "Updating launch template $TEMPLATE_ID"
@@ -96,10 +106,19 @@ jobs:
               --launch-template-id $TEMPLATE_ID \
               --launch-template-data '{
                 "ImageId": "${{ needs.build-ami.outputs.ami-id }}",
-                "InstanceType": "t3.micro",
+                "InstanceType": "t2.micro",
                 "SecurityGroupIds": ["${{ secrets.SECURITY_GROUP_ID }}"],
                 "IamInstanceProfile": {"Name": "${{ secrets.IAM_INSTANCE_PROFILE }}"},
-                "UserData": "'$(echo 'IyEvYmluL2Jhc2gKc3VkbyBzeXN0ZW1jdGwgc3RhcnQgc3RyZWFtbGl0LWFwcA==' | base64 -d | base64 -w 0)'"
+                "UserData": "'$(echo 'IyEvYmluL2Jhc2gKc3VkbyBzeXN0ZW1jdGwgc3RhcnQgc3RyZWFtbGl0LWFwcA==' | base64 -d | base64 -w 0)'",
+                "TagSpecifications": [
+                  {
+                    "ResourceType": "instance",
+                    "Tags": [
+                      {"Key": "Name", "Value": "${{ env.APP_NAME }}"},
+                      {"Key": "Environment", "Value": "production"}
+                    ]
+                  }
+                ]
               }'
             
             # Set as default version
