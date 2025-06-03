@@ -2,15 +2,14 @@
 set -e
 
 # Update system
-sudo apt-get update
-sudo apt-get upgrade -y
+sudo yum update -y
 
 # Install Python and required packages
-sudo apt-get install -y python3 python3-pip python3-venv nginx
+sudo yum install -y python3 python3-pip nginx
 
 # Create application directory
 sudo mkdir -p /opt/streamlit-app
-sudo chown ubuntu:ubuntu /opt/streamlit-app
+sudo chown ec2-user:ec2-user /opt/streamlit-app
 
 # Copy application files
 cp -r /tmp/app/* /opt/streamlit-app/
@@ -27,12 +26,11 @@ source venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 
-# Install CloudWatch agent (optional)
-wget https://s3.amazonaws.com/amazoncloudwatch-agent/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb
-sudo dpkg -i -E ./amazon-cloudwatch-agent.deb
+# Install CloudWatch agent
+sudo yum install -y amazon-cloudwatch-agent
 
-# Configure nginx (optional - for reverse proxy)
-sudo tee /etc/nginx/sites-available/streamlit << EOF
+# Configure nginx
+sudo tee /etc/nginx/conf.d/streamlit.conf << EOF
 server {
     listen 80;
     server_name _;
@@ -51,11 +49,7 @@ server {
 }
 EOF
 
-sudo ln -sf /etc/nginx/sites-available/streamlit /etc/nginx/sites-enabled/
-sudo rm -f /etc/nginx/sites-enabled/default
-sudo nginx -t
 sudo systemctl enable nginx
 
 # Clean up
-sudo apt-get autoremove -y
-sudo apt-get autoclean
+sudo yum clean all
