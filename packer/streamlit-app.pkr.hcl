@@ -35,6 +35,9 @@ build {
     "source.amazon-ebs.streamlit-app"
   ]
   
+  provisioner "shell" {
+    inline = ["mkdir -p /tmp/app"]
+  }
   # Copy application files
   provisioner "file" {
     source      = "../"
