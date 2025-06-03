@@ -38,7 +38,7 @@ build {
   # Copy application files
   provisioner "file" {
     source      = "../"
-    destination = "/tmp/app"
+    destination = "/tmp/app/"
   }
   
   # Run setup script
