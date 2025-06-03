@@ -1,0 +1,147 @@
+name: Build and Deploy AMI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: "Force deployment even if no changes"
+        required: false
+        default: false
+        type: boolean
+
+env:
+  AWS_REGION: us-east-1
+  APP_NAME: streamlit-app
+
+jobs:
+  build-ami:
+    runs-on: ubuntu-latest
+    outputs:
+      ami-id: ${{ steps.build.outputs.ami-id }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Packer
+        uses: hashicorp/setup-packer@main
+        with:
+          version: latest
+
+      - name: Initialize Packer
+        run: |
+          cd packer
+          packer init .
+
+      - name: Validate Packer template
+        run: |
+          cd packer
+          packer validate streamlit-app.pkr.hcl
+
+      - name: Build AMI
+        id: build
+        run: |
+          cd packer
+          packer build \
+            -var "app_version=${{ github.sha }}" \
+            streamlit-app.pkr.hcl | tee build.log
+
+          # Extract AMI ID from build log
+          AMI_ID=$(grep -oP 'ami-\w+' build.log | tail -1)
+          echo "ami-id=$AMI_ID" >> $GITHUB_OUTPUT
+          echo "Built AMI: $AMI_ID"
+
+  deploy:
+    needs: build-ami
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update Launch Template
+        run: |
+          # Get current launch template
+          TEMPLATE_ID=$(aws ec2 describe-launch-templates \
+            --launch-template-names ${{ env.APP_NAME }}-template \
+            --query 'LaunchTemplates[0].LaunchTemplateId' \
+            --output text)
+
+          if [ "$TEMPLATE_ID" = "None" ]; then
+            echo "Creating new launch template"
+            aws ec2 create-launch-template \
+              --launch-template-name ${{ env.APP_NAME }}-template \
+              --launch-template-data '{
+                "ImageId": "${{ needs.build-ami.outputs.ami-id }}",
+                "InstanceType": "t3.micro",
+                "SecurityGroupIds": ["${{ secrets.SECURITY_GROUP_ID }}"],
+                "IamInstanceProfile": {"Name": "${{ secrets.IAM_INSTANCE_PROFILE }}"},
+                "UserData": "'$(echo 'IyEvYmluL2Jhc2gKc3VkbyBzeXN0ZW1jdGwgc3RhcnQgc3RyZWFtbGl0LWFwcA==' | base64 -d | base64 -w 0)'"
+              }'
+          else
+            echo "Updating launch template $TEMPLATE_ID"
+            aws ec2 create-launch-template-version \
+              --launch-template-id $TEMPLATE_ID \
+              --launch-template-data '{
+                "ImageId": "${{ needs.build-ami.outputs.ami-id }}",
+                "InstanceType": "t3.micro",
+                "SecurityGroupIds": ["${{ secrets.SECURITY_GROUP_ID }}"],
+                "IamInstanceProfile": {"Name": "${{ secrets.IAM_INSTANCE_PROFILE }}"},
+                "UserData": "'$(echo 'IyEvYmluL2Jhc2gKc3VkbyBzeXN0ZW1jdGwgc3RhcnQgc3RyZWFtbGl0LWFwcA==' | base64 -d | base64 -w 0)'"
+              }'
+            
+            # Set as default version
+            aws ec2 modify-launch-template \
+              --launch-template-id $TEMPLATE_ID \
+              --default-version '$Latest'
+          fi
+
+      - name: Deploy New Instance
+        run: |
+          # Terminate existing instance (if using single instance)
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=${{ env.APP_NAME }}" \
+                     "Name=instance-state-name,Values=running" \
+            --query 'Reservations[0].Instances[0].InstanceId' \
+            --output text)
+
+          if [ "$INSTANCE_ID" != "None" ] && [ "$INSTANCE_ID" != "null" ]; then
+            echo "Terminating existing instance: $INSTANCE_ID"
+            aws ec2 terminate-instances --instance-ids $INSTANCE_ID
+            
+            # Wait for termination
+            aws ec2 wait instance-terminated --instance-ids $INSTANCE_ID
+          fi
+
+          # Launch new instance
+          echo "Launching new instance with AMI: ${{ needs.build-ami.outputs.ami-id }}"
+          NEW_INSTANCE_ID=$(aws ec2 run-instances \
+            --launch-template LaunchTemplateName=${{ env.APP_NAME }}-template,Version='$Latest' \
+            --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=${{ env.APP_NAME }}},{Key=Environment,Value=production}]' \
+            --query 'Instances[0].InstanceId' \
+            --output text)
+
+          echo "New instance launched: $NEW_INSTANCE_ID"
+
+          # Wait for instance to be running
+          aws ec2 wait instance-running --instance-ids $NEW_INSTANCE_ID
+
+          # Get public IP
+          PUBLIC_IP=$(aws ec2 describe-instances \
+            --instance-ids $NEW_INSTANCE_ID \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' \
+            --output text)
+
+          echo "Application deployed at: http://$PUBLIC_IP"
