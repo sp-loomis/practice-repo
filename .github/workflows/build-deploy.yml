@@ -64,12 +64,6 @@ jobs:
     needs: build-ami
     runs-on: ubuntu-latest
     steps:
-      - name: Setup SSH key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key.pem
-          chmod 600 ~/.ssh/ec2_key.pem
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -79,6 +73,28 @@ jobs:
 
       - name: Deploy New Instance
         run: |
+          # Create user data script
+          cat > userdata.sh << 'EOF'
+          #!/bin/bash
+          # Log all output
+          exec > >(tee /var/log/user-data.log) 2>&1
+
+          echo "Starting user data script execution"
+          cd /home/ec2-user/streamlit-app
+
+          # Activate virtual environment and run app
+          sudo -u ec2-user bash -c '
+          cd /home/ec2-user/streamlit-app
+          source venv/bin/activate
+          nohup streamlit run app.py --server.address 0.0.0.0 --server.port 8501 > streamlit.log 2>&1 &
+          '
+
+          echo "Streamlit app started in background"
+          EOF
+
+          # Encode the user data script
+          USERDATA=$(base64 -w 0 userdata.sh)
+
           # Terminate existing instance (if using single instance)
           INSTANCE_ID=$(aws ec2 describe-instances \
             --filters "Name=tag:Name,Values=${{ env.APP_NAME }}" \
@@ -101,6 +117,7 @@ jobs:
             --instance-type t2.micro \
             --security-group-ids ${{ secrets.SECURITY_GROUP_ID }} \
             --iam-instance-profile Name=${{ secrets.IAM_INSTANCE_PROFILE }} \
+            --user-data "$USERDATA" \
             --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=${{ env.APP_NAME }}},{Key=Environment,Value=production}]' \
             --query 'Instances[0].InstanceId' \
             --output text)
@@ -116,24 +133,7 @@ jobs:
             --query 'Reservations[0].Instances[0].PublicIpAddress' \
             --output text)
 
-          echo "Application deployed at: http://$PUBLIC_IP"
-
-          # Wait for SSH to be available
-          echo "Waiting for SSH to become available..."
-          while ! ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i ~/.ssh/ec2_key.pem ec2-user@$PUBLIC_IP echo "SSH is up" 2>/dev/null; do
-            sleep 5
-          done
-
-          # Start the Streamlit app
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/ec2_key.pem ec2-user@$PUBLIC_IP << 'EOF'
-            cd ~/streamlit-app
-            source venv/bin/activate
-            # Kill any existing Streamlit processes
-            pkill -f "streamlit run" || true
-            # Start the Streamlit app in the background
-            nohup streamlit run app.py --server.address 0.0.0.0 --server.port 8501 > streamlit.log 2>&1 &
-            echo "Streamlit app started!"
-          EOF
+          echo "Application deployed at: http://$PUBLIC_IP:8501"
 
           # Wait for the application to be available
           echo "Waiting for application to start (this may take a few minutes)..."
