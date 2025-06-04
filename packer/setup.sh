@@ -7,13 +7,12 @@ sudo yum update -y
 # Install Python and required packages
 sudo yum install -y python3 python3-pip nginx
 
-# Create application directory
-sudo mkdir -p /opt/streamlit-app
-sudo chown ec2-user:ec2-user /opt/streamlit-app
+# Create application directory in home directory instead of /opt
+mkdir -p ~/streamlit-app
 
 # Copy application files
-cp -r /tmp/app/* /opt/streamlit-app/
-cd /opt/streamlit-app
+cp -r /tmp/app/* ~/streamlit-app/
+cd ~/streamlit-app
 
 # Remove packer directory from the app
 rm -rf packer/
