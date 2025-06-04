@@ -73,6 +73,28 @@ jobs:
 
       - name: Update Launch Template
         run: |
+          # Create a more robust user data script
+          cat > userdata.sh << 'EOF'
+          #!/bin/bash
+          # Log all output
+          exec > >(tee /var/log/user-data.log) 2>&1
+
+          echo "Starting user data script execution"
+          cd /home/ec2-user/streamlit-app
+
+          # Activate virtual environment and run app
+          sudo -u ec2-user bash -c '
+          cd /home/ec2-user/streamlit-app
+          source venv/bin/activate
+          nohup streamlit run app.py --server.address 0.0.0.0 --server.port 8501 > streamlit.log 2>&1 &
+          '
+
+          echo "Streamlit app started in background"
+          EOF
+
+          # Encode the user data script
+          USERDATA=$(base64 -w 0 userdata.sh)
+
           # Try to get current launch template, but don't fail if it doesn't exist
           TEMPLATE_ID=$(aws ec2 describe-launch-templates \
             --launch-template-names ${{ env.APP_NAME }}-template \
@@ -89,7 +111,7 @@ jobs:
                 "InstanceType": "t2.micro",
                 "SecurityGroupIds": ["${{ secrets.SECURITY_GROUP_ID }}"],
                 "IamInstanceProfile": {"Name": "${{ secrets.IAM_INSTANCE_PROFILE }}"},
-                "UserData": "'$(echo 'IyEvYmluL2Jhc2gKc3VkbyBzeXN0ZW1jdGwgc3RhcnQgc3RyZWFtbGl0LWFwcA==' | base64 -d | base64 -w 0)'",
+                "UserData": "'$USERDATA'",
                 "TagSpecifications": [
                   {
                     "ResourceType": "instance",
@@ -109,7 +131,7 @@ jobs:
                 "InstanceType": "t2.micro",
                 "SecurityGroupIds": ["${{ secrets.SECURITY_GROUP_ID }}"],
                 "IamInstanceProfile": {"Name": "${{ secrets.IAM_INSTANCE_PROFILE }}"},
-                "UserData": "'$(echo 'IyEvYmluL2Jhc2gKc3VkbyBzeXN0ZW1jdGwgc3RhcnQgc3RyZWFtbGl0LWFwcA==' | base64 -d | base64 -w 0)'",
+                "UserData": "'$USERDATA'",
                 "TagSpecifications": [
                   {
                     "ResourceType": "instance",
